@@ -4,7 +4,6 @@
 import numpy as np
 import scipy.stats as st
 
-# Initial Parameters and Market Quotes.
 V_Market = 4 # Market Call/Put option price.
 K = 120 # Strike price
 Tau = 1 # Time to Maturity (Years)
@@ -13,47 +12,58 @@ S_0 = 100 # Current Stock Price
 SigmaInitial = 0.11 # Current Initial Implied Volatility
 CP = "C" # C = Call : P = Put
 
-def ImpliedVolatility(CP, S_0, K, SigmaInitial, Tau, R):
-    Error = 1e10; # Initial Error
-    OptPrice = lambda SigmaInitial: BS_CP_Option_Price(CP, S_0, K, SigmaInitial, Tau, R)
-    Vega = lambda SigmaInitial: dV_Sigma(S_0, K, SigmaInitial, Tau, R)
+def ImpliedVolatility(CP, S_0, K, SigmaInitial, Tau, R, Max_Iterations = 100, Tolerance = 1e-6):
+    """Calculate the Implied Volatility using Newton-Raphson."""
+    if S_0 <= 0:
+        raise ValueError(f"Invalid input: S_0={S_0}")
+    elif K <= 0:
+        raise ValueError(f"Invalid input: K={K}")
+    elif Tau <= 0:
+        raise ValueError(f"Invalid input: Tau={Tau}")
+    elif SigmaInitial <= 0:
+        raise ValueError(f"Invalid input: SigmaInitial={SigmaInitial}")
 
-    n = 1.0
-    while Error > 10e-10:
-        G       = OptPrice(SigmaInitial) - V_Market
-        G_Prim  = Vega(SigmaInitial)
-        Sigma_New = SigmaInitial - G / G_Prim
+    for n in range(1, Max_Iterations + 1):
+        D1, D2 = Calculate_D_Parameters(S_0, K, SigmaInitial, Tau, R)
+        G = BS_CP_Option_Price(CP, S_0, K, SigmaInitial, Tau, R, D1, D2) - V_Market
+        G_Prime = dV_Sigma(S_0, K, SigmaInitial, Tau, R, D1, D2)
+        if abs(G_Prime) < Tolerance:
+            raise ValueError("Vega too small to converge.")
 
-        #Error = abs(Sigma_New - SigmaInitial)
+        Sigma_New = SigmaInitial - G / G_Prime
         Error = abs(G)
-        SigmaInitial = Sigma_New;
+        print(f"Iteration {n} with Error = {Error}")
+        if Error < Tolerance:
+            return Sigma_New
 
-        print('Iteration {0} with Error = {1}'.format(n, Error))
+        SigmaInitial = Sigma_New
+    raise ValueError("Failed to converge.")
 
-        n = n+1
-    return SigmaInitial
+def Calculate_D_Parameters(S_0, K, SigmaInitial, Tau, R):
+    """Calculate the D1 and D2 parameters."""
+    if Tau <= 0:
+        raise ValueError(f"Invalid Input: Tau={Tau}")
+    D1 = (np.log(S_0 / K) + (R + 0.5 * SigmaInitial ** 2) * Tau) / (SigmaInitial * np.sqrt(Tau))
+    D2 = D1 - SigmaInitial * np.sqrt(Tau)
+    return D1, D2
 
-def dV_Sigma(S_0, K, SigmaInitial, Tau, R):
+def dV_Sigma(S_0, K, SigmaInitial, Tau, R, D1, D2):
+    """Calculate Vega - The sensitivity to volatility changes."""
+    return S_0 * st.norm.pdf(D1) * np.sqrt(Tau)
 
-    d2 = (np.log(S_0 / float(K)) + (R-0.5 * np.power(SigmaInitial, 2.0)) * Tau) / float(SigmaInitial * np.sqrt(Tau))
-    Value = K * np.exp(-R * Tau) * st.norm.pdf(d2) * np.sqrt(Tau)
-    return Value
-
-def BS_CP_Option_Price(CP, S_0, K, SigmaInitial, Tau, R):
-    #BS Call/Put Option Price
-    d1 = (np.log(S_0 / float(K)) + (R + 0.5 * np.power(SigmaInitial, 2.0)) * Tau) / float(SigmaInitial * np.sqrt(Tau))
-    d2 = d1 - SigmaInitial * np.sqrt(Tau)
-    if str(CP).upper() == "C" or str(CP).lower() == "1":
-        Value = st.norm.cdf(d1) * S_0 - st.norm.cdf(d2) * K * np.exp(-R * Tau)
-    elif str(CP).upper() == "P" or str(CP).lower() == "-1":
-        Value = st.norm.cdf(-d2) * K * np.exp(-R * Tau) - st.norm.cdf(-d1) * S_0
-    return Value
+def BS_CP_Option_Price(CP, S_0, K, SigmaInitial, Tau, R, D1, D2):
+    """Calculate the Black-Scholes option price for call or put."""
+    if CP.upper() == "C":
+        return st.norm.cdf(D1) * S_0 - st.norm.cdf(D2) * K * np.exp(-R * Tau)
+    elif CP.upper() == "P":
+        return st.norm.cdf(-D2) * K * np.exp(-R * Tau) - st.norm.cdf(-D1) * S_0
+    raise ValueError("Invalid Option Type")
 
 Sigma_Imp = ImpliedVolatility(CP, S_0, K, SigmaInitial, Tau, R)
-Message = ''' Implied Volatility for CallPrice = {}, Strike K = {}, Maturity T = {}, Interest Rate R = {} and
-initial stock S_0 = {} equals Sigma_Imp = {:.7f}'''.format(V_Market, K, Tau, R, S_0, Sigma_Imp)
+print(f"Implied Volatility Calculation Results:  Market Price: ${V_Market} "
+      f"Strike: ${K}  Time to Maturity: {Tau} years  Risk-free Rate: {R:.1%}  Current Stock Price: ${S_0} "
+      f"Implied Volatility: {Sigma_Imp:.4f} ({Sigma_Imp:.2%})")
 
-print(Message)
-
-Val = BS_CP_Option_Price(CP, S_0, K, Sigma_Imp, Tau, R)
-print('Option price for Imp Vol of {0} is equal to {1}'.format(Sigma_Imp, Val))
+D1, D2 = Calculate_D_Parameters(S_0, K, Sigma_Imp, Tau, R)
+Val = BS_CP_Option_Price(CP, S_0, K, Sigma_Imp, Tau, R, D1, D2)
+print(f'Option price for Implied Vol of {Sigma_Imp:.4f} is equal to ${Val:.6f}')
